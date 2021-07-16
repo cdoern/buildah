@@ -42,14 +42,15 @@ import (
 // instruction in the Dockerfile, since that's usually an indication of a user
 // error, but for these values we make exceptions and ignore them.
 var builtinAllowedBuildArgs = map[string]bool{
-	"HTTP_PROXY":  true,
-	"http_proxy":  true,
-	"HTTPS_PROXY": true,
-	"https_proxy": true,
-	"FTP_PROXY":   true,
-	"ftp_proxy":   true,
-	"NO_PROXY":    true,
-	"no_proxy":    true,
+	"HTTP_PROXY":    true,
+	"http_proxy":    true,
+	"HTTPS_PROXY":   true,
+	"https_proxy":   true,
+	"FTP_PROXY":     true,
+	"ftp_proxy":     true,
+	"NO_PROXY":      true,
+	"no_proxy":      true,
+	"BUILDPLATFORM": true,
 }
 
 // Executor is a buildah-based implementation of the imagebuilder.Executor
@@ -273,6 +274,7 @@ func NewExecutor(logger *logrus.Logger, store storage.Store, options define.Buil
 			exec.unusedArgs[arg] = struct{}{}
 		}
 	}
+	alreadyDone := false
 	for _, line := range mainNode.Children {
 		node := line
 		for node != nil { // tokens on this line, though we only care about the first
@@ -288,9 +290,45 @@ func NewExecutor(logger *logrus.Logger, store storage.Store, options define.Buil
 						delete(exec.unusedArgs, list[0])
 					}
 				}
+			case "FROM":
+				head := node
+				if head.Next != nil && !alreadyDone && head.Next.Value != "scratch" {
+					child := head.Next
+					for typeArg, val := range options.Args {
+						if typeArg == "BUILDPLATFORM" && !alreadyDone {
+							if strings.Contains(child.Value, "--platform") {
+								alreadyDone = true
+								child.Value = "--platform=" + val
+								ind := strings.Index(line.Original, "M")
+								part1 := line.Original[:ind+1]
+								total := part1 + child.Value + line.Original[ind+1:]
+								line.Original = total
+							} else {
+								yesno := strings.Contains(child.Value, ":")
+								if yesno {
+									alreadyDone = true
+									temp := head.Next
+									newnext := parser.Node{}
+									newnext.Value = " --platform=" + val + " "
+									head.Next = &newnext
+									newnext.Next = temp
+									ind := strings.Index(line.Original, "M")
+									part1 := line.Original[:ind+1]
+									total := part1 + newnext.Value + line.Original[ind+1:]
+									line.Original = total
+									head = head.Next
+									break
+								}
+							}
+							break
+						}
+					}
+					head = head.Next
+				}
 			}
 			break
 		}
+
 	}
 	return &exec, nil
 }
